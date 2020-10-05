@@ -15,6 +15,8 @@ type Folder struct {
 	Name     string `gorm:"unique_index:idx_only_one_name"`
 	ParentID *uint  `gorm:"index:parent_id;unique_index:idx_only_one_name"`
 	OwnerID  uint   `gorm:"index:owner_id"`
+	Path string
+	ParentPath string
 
 	// 数据库忽略字段
 	Position string `gorm:"-"`
@@ -103,6 +105,21 @@ func GetRecursiveChildFolder(dirs []uint, uid uint, includeSelf bool) ([]Folder,
 
 	return folders, err
 }
+
+// 替换目录的路径
+func UpdateFolderPath(ids []uint, oldPath string, newPath string) error {
+	result := DB.Model(&Folder{}).Where("id in (?)", ids).
+		Update("path", gorm.Expr("replace(path, ?, ?)", oldPath, newPath)).Error
+	return result
+}
+
+// 替换父目录的路径
+func UpdateFolderParentPath(ids []uint, oldPath string, newPath string) error {
+	result := DB.Model(&Folder{}).Where("id in (?)", ids).
+		Update("parent_path", gorm.Expr("replace(parent_path, ?, ?)", oldPath, newPath)).Error
+	return result
+}
+
 
 // DeleteFolderByIDs 根据给定ID批量删除目录记录
 func DeleteFolderByIDs(ids []uint) error {

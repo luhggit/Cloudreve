@@ -198,6 +198,13 @@ func (file *File) UpdateSourceName(value string) error {
 	return DB.Model(&file).Update("source_name", value).Error
 }
 
+// 替换目录的路径
+func UpdateFilePath(ids []uint, oldPath string, newPath string) error {
+	result := DB.Model(&File{}).Where("folder_id in (?)", ids).
+		Update("source_name", gorm.Expr("replace(source_name, ?, ?)", oldPath, newPath)).Error
+	return result
+}
+
 /*
 	实现 webdav.FileInfo 接口
 */

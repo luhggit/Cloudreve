@@ -8,6 +8,8 @@ import (
 	"github.com/HFO4/cloudreve/pkg/hashid"
 	"github.com/HFO4/cloudreve/pkg/serializer"
 	"github.com/HFO4/cloudreve/pkg/util"
+	"github.com/cloudflare/cfssl/log"
+	"os"
 	"path"
 	"strings"
 )
@@ -43,10 +45,28 @@ func (fs *FileSystem) Rename(ctx context.Context, dir, file []uint, new string) 
 			return ErrPathNotExist
 		}
 
-		err = fileObject[0].Rename(new)
+		file := fileObject[0]
+		err = file.Rename(new)
 		if err != nil {
 			return ErrFileExisted
 		}
+
+		// 实际文件的重命名
+		if fs.User.Policy.Type == "local" {
+			sourceName := file.SourceName
+			paths := strings.Split(sourceName, "/")
+			paths = paths[:len(paths)-1]
+			newSourceName := strings.Join(paths, "/") + "/" + new
+			err = file.UpdateSourceName(newSourceName)
+			if err != nil {
+				return err
+			}
+			err = os.Rename(sourceName, newSourceName)
+			if err != nil {
+				return err
+			}
+		}
+
 		return nil
 	}
 
@@ -56,10 +76,48 @@ func (fs *FileSystem) Rename(ctx context.Context, dir, file []uint, new string) 
 			return ErrPathNotExist
 		}
 
-		err = folderObject[0].Rename(new)
+		folder := folderObject[0]
+		err = folder.Rename(new)
 		if err != nil {
 			return ErrFileExisted
 		}
+
+		// 实际文件夹的重命名
+		if fs.User.Policy.Type == "local" {
+			oldPath := folder.Path
+			paths := strings.Split(oldPath, "/")
+			paths = paths[:len(paths)-1]
+			newPath := strings.Join(paths, "/") + "/" + new
+
+			var dirs []uint
+			dirs = append(dirs, folder.ID)
+			// 列出所有递归子目录
+			folders, err := model.GetRecursiveChildFolder(dirs, fs.User.ID, true)
+			if err != nil {
+				return err
+			}
+			// 整理目录的ID
+			var folderIDs = make([]uint, 0, len(folders))
+			for _, folder := range folders {
+				folderIDs = append(folderIDs, folder.ID)
+			}
+			// 更新目录的路径
+			err = model.UpdateFolderPath(folderIDs, oldPath, newPath)
+			if err != nil {
+				return err
+			}
+			// 更新目录下面的文件的路径（source_name)
+			err = model.UpdateFilePath(folderIDs, oldPath, newPath)
+			if err != nil {
+				return err
+			}
+			// 文件系统重命名
+			err = os.Rename(oldPath, newPath)
+			if err != nil {
+				return err
+			}
+		}
+
 		return nil
 	}
 
@@ -126,7 +184,82 @@ func (fs *FileSystem) Move(ctx context.Context, dirs, files []uint, src, dst str
 		return serializer.NewError(serializer.CodeDBError, "操作失败，可能有重名冲突", err)
 	}
 
-	// 移动文件
+	// 本地存储策略，移动目录
+	if fs.User.Policy.Type == "local" {
+		// 文件夹的移动
+		if len(dirs) > 0 {
+			// 移动实际的文件夹
+			folders, err := model.GetFoldersByIDs(dirs, fs.User.ID)
+			if err != nil {
+				return nil
+			}
+			if len(folders) > 0 {
+				for _, folder := range folders {
+					OldPath := folder.Path
+					DstPath := dstFolder.Path
+					if DstPath == "/" || DstPath == "" {
+						DstPath = fs.User.Policy.GeneratePath(
+							fs.User.Model.ID,
+							"",
+						)
+					}
+					NewPath := DstPath + "/" + folder.Name
+					err = os.Rename(OldPath, NewPath)
+					if err != nil {
+						return err
+					}
+					// 更新数据库
+					// 列出所有递归子目录
+					folders, err := model.GetRecursiveChildFolder(dirs, fs.User.ID, true)
+					if err != nil {
+						return err
+					}
+					// 整理目录的ID
+					var folderIDs = make([]uint, 0, len(folders))
+					for _, folder := range folders {
+						folderIDs = append(folderIDs, folder.ID)
+					}
+					// 更新目录的路径
+					err = model.UpdateFolderPath(folderIDs, OldPath, NewPath)
+					if err != nil {
+						return err
+					}
+					// 更新目录下面的文件的路径（source_name)
+					err = model.UpdateFilePath(folderIDs, OldPath, NewPath)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		// 文件的移动
+		if len(files) > 0 {
+			dstPath := dstFolder.Path
+			if dstPath == "/" || dstPath == "" {
+				dstPath = fs.User.Policy.GeneratePath(
+					fs.User.Model.ID,
+					"",
+				)
+			}
+			files, err := model.GetFilesByIDs(files, fs.User.ID)
+			if err != nil {
+				return err
+			}
+			for _, file := range files {
+				oldSourceName := file.SourceName
+				newSourceName := dstPath + "/" + file.Name
+				err = file.UpdateSourceName(newSourceName)
+				if err != nil {
+					return err
+				}
+				err = os.Rename(oldSourceName, newSourceName)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	return err
 }
@@ -212,6 +345,7 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force bool
 			allFolderIDs = append(allFolderIDs, value.ID)
 		}
 		err = model.DeleteFolderByIDs(allFolderIDs)
+
 		if err != nil {
 			return ErrDBDeleteObjects.WithError(err)
 		}
@@ -228,11 +362,28 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force bool
 		)
 	}
 
+	// 本地存储策略，删除目录
+	if fs.User.Policy.Type == "local" {
+		if len(dirs) > 0 {
+			// 删除实际的文件夹
+			folders, err := model.GetFoldersByIDs(dirs, fs.User.ID)
+			if err != nil {
+				return nil
+			}
+			if len(folders) > 0 {
+				for _, folder := range folders {
+					folderPath := folder.Path
+					os.RemoveAll(folderPath)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
 // ListDeleteDirs 递归列出要删除目录，及目录下所有文件
-func (fs *FileSystem) ListDeleteDirs(ctx context.Context, ids []uint) error {
+func (fs *FileSystem) ListDeleteDirs(ctx context.Context, ids []uint) (error) {
 	// 列出所有递归子目录
 	folders, err := model.GetRecursiveChildFolder(ids, fs.User.ID, true)
 	if err != nil {
@@ -390,6 +541,10 @@ func (fs *FileSystem) CreateDirectory(ctx context.Context, fullPath string) (*mo
 	base := path.Dir(fullPath)
 	dir := path.Base(fullPath)
 
+	log.Info("fullPath:" + fullPath)
+	log.Info("base:" + base)
+	log.Info("dir:" + dir)
+
 	// 去掉结尾空格
 	dir = strings.TrimRight(dir, " ")
 
@@ -417,13 +572,34 @@ func (fs *FileSystem) CreateDirectory(ctx context.Context, fullPath string) (*mo
 		return nil, ErrFileExisted
 	}
 
+	// 实际的文件夹路径
+	real_path := fs.User.Policy.GeneratePath(
+		fs.User.Model.ID,
+		fullPath,
+	)
+
 	// 创建目录
 	newFolder := model.Folder{
 		Name:     dir,
 		ParentID: &parent.ID,
 		OwnerID:  fs.User.ID,
+		Path: real_path,
 	}
 	_, err := newFolder.Create()
+
+	// 本地存储策略，如果目标目录不存在，创建
+	if fs.User.Policy.Type == "local" {
+		log.Info("real_path:" + real_path)
+
+		// 创建实际的文件夹
+		//basePath := filepath.Dir(real_path)
+		if !util.Exists(real_path) {
+			err := os.MkdirAll(real_path, 0744)
+			if err != nil {
+				util.Log().Warning("无法创建目录，%s", err)
+			}
+		}
+	}
 
 	if err != nil {
 		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
