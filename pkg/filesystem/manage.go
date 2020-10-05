@@ -338,6 +338,12 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force bool
 	}
 	fs.User.DeductionStorage(total)
 
+	// 当前层级的文件夹
+	curFolders, err := model.GetFoldersByIDs(dirs, fs.User.ID)
+	if err != nil {
+		return nil
+	}
+
 	// 如果文件全部删除成功，继续删除目录
 	if len(deletedFileIDs) == len(allFileIDs) {
 		var allFolderIDs = make([]uint, 0, len(fs.DirTarget))
@@ -365,13 +371,8 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force bool
 	// 本地存储策略，删除目录
 	if fs.User.Policy.Type == "local" {
 		if len(dirs) > 0 {
-			// 删除实际的文件夹
-			folders, err := model.GetFoldersByIDs(dirs, fs.User.ID)
-			if err != nil {
-				return nil
-			}
-			if len(folders) > 0 {
-				for _, folder := range folders {
+			if len(curFolders) > 0 {
+				for _, folder := range curFolders {
 					folderPath := folder.Path
 					os.RemoveAll(folderPath)
 				}

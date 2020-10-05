@@ -12,9 +12,14 @@ var RedisConfig = &redis{
 
 // DatabaseConfig 数据库配置
 var DatabaseConfig = &database{
-	Type:   "UNSET",
+	Type:   "mysql",
 	DBFile: "cloudreve.db",
-	Port:   3306,
+	Host: "luhg.server.com",
+	Port:   13306,
+	User: "root",
+	Password: "342521lu",
+	Name: "cloudreve",
+	TablePrefix: "own_",
 }
 
 // SystemConfig 系统公用配置
@@ -68,5 +73,5 @@ var SSLConfig = &ssl{
 }
 
 var UnixConfig = &unix{
-    Listen: "",
+	Listen: "",
 }
