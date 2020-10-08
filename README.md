@@ -97,7 +97,8 @@ cd ../
 go get github.com/rakyll/statik
 
 # 开始嵌入
-statik -src=assets/build/  -include=*.html,*.js,*.json,*.css,*.png,*.svg,*.ico -f
+#statik -src=assets/build/  -include=*.html,*.js,*.json,*.css,*.png,*.svg,*.ico -f
+statik -src=../cloudreve-frontend/build -f # 注意cloudreve-frontend是自己的git项目，注意src的目录是前端资源的build目录就行了
 ```
 
 #### 编译项目
