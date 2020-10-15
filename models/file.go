@@ -205,6 +205,13 @@ func UpdateFilePath(ids []uint, oldPath string, newPath string) error {
 	return result
 }
 
+// 根据文件名查找文件id
+func GetFileIdByName(name string) (uint, error) {
+	var file File
+	result := DB.Where("name = ?", name).Find(&file)
+	return file.ID, result.Error
+}
+
 /*
 	实现 webdav.FileInfo 接口
 */

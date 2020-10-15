@@ -121,6 +121,43 @@ func GetSource(c *gin.Context) {
 
 }
 
+// GetSourceByName 通过文件名获取文件的外链地址
+func GetSourceByName(c *gin.Context) {
+	// 创建上下文
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fs, err := filesystem.NewFileSystemFromContext(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(serializer.CodePolicyNotAllowed, err.Error(), err))
+		return
+	}
+	defer fs.Recycle()
+
+	// 文件名
+	fileName := c.Param("name")
+	// 获取文件id
+	fileID, err := model.GetFileIdByName(fileName)
+	if err != nil {
+		c.JSON(200, serializer.Err(serializer.CodeNotSet, err.Error(), err))
+		return
+	}
+
+	sourceURL, err := fs.GetSource(ctx, fileID)
+	if err != nil {
+		c.JSON(200, serializer.Err(serializer.CodeNotSet, err.Error(), err))
+		return
+	}
+
+	c.JSON(200, serializer.Response{
+		Code: 0,
+		Data: struct {
+			URL string `json:"url"`
+		}{URL: sourceURL},
+	})
+
+}
+
 // Thumb 获取文件缩略图
 func Thumb(c *gin.Context) {
 	// 创建上下文
