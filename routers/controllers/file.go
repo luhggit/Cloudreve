@@ -137,7 +137,7 @@ func GetSourceByName(c *gin.Context) {
 	// 文件名
 	fileName := c.Param("name")
 	// 获取文件id
-	fileID, err := model.GetFileIdByName(fileName)
+	fileID, err := model.GetFileIdByNameAndUser(fileName, fs.User.ID)
 	if err != nil {
 		c.JSON(200, serializer.Err(serializer.CodeNotSet, err.Error(), err))
 		return

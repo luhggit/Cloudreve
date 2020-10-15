@@ -206,9 +206,9 @@ func UpdateFilePath(ids []uint, oldPath string, newPath string) error {
 }
 
 // 根据文件名查找文件id
-func GetFileIdByName(name string) (uint, error) {
+func GetFileIdByNameAndUser(name string, uid uint) (uint, error) {
 	var file File
-	result := DB.Where("name = ?", name).Find(&file)
+	result := DB.Where("name = ? AND user_id = ?", name, uid).Find(&file)
 	return file.ID, result.Error
 }
 
