@@ -467,7 +467,7 @@ func InitMasterRouter() *gin.Engine {
 				// 取得文件外链
 				file.GET("source/:id", controllers.GetSource)
 				// 通过文件名取得文件外链
-				file.GET("source/:name", controllers.GetSourceByName)
+				file.GET("source/by-name/:name", controllers.GetSourceByName)
 				// 打包要下载的文件
 				file.POST("archive", controllers.Archive)
 				// 创建文件压缩任务
