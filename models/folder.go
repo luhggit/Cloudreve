@@ -134,6 +134,31 @@ func GetFoldersByIDs(ids []uint, uid uint) ([]Folder, error) {
 	return folders, result.Error
 }
 
+// GetFoldersByKeywords 根据关键字搜索文件夹,
+// UID为0表示忽略用户
+func GetFoldersByKeywords(uid uint, keywords ...interface{}) ([]Folder, error) {
+	var (
+		folders      []Folder
+		result     = DB
+		conditions string
+	)
+
+	// 生成查询条件
+	for i := 0; i < len(keywords); i++ {
+		conditions += "name like ?"
+		if i != len(keywords)-1 {
+			conditions += " or "
+		}
+	}
+
+	if uid != 0 {
+		result = result.Where("user_id = ?", uid)
+	}
+	result = result.Where("("+conditions+")", keywords...).Find(&folders)
+
+	return folders, result.Error
+}
+
 // MoveOrCopyFileTo 将此目录下的files移动或复制至dstFolder，
 // 返回此操作新增的容量
 func (folder *Folder) MoveOrCopyFileTo(files []uint, dstFolder *Folder, isCopy bool) (uint64, error) {

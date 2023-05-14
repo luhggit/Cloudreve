@@ -103,6 +103,7 @@ func GetFilesByKeywords(uid uint, keywords ...interface{}) ([]File, error) {
 	return files, result.Error
 }
 
+
 // GetChildFilesOfFolders 批量检索目录子文件
 func GetChildFilesOfFolders(folders *[]Folder) ([]File, error) {
 	// 将所有待删除目录ID抽离，以便检索文件

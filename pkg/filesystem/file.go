@@ -352,5 +352,9 @@ func (fs *FileSystem) Search(ctx context.Context, keywords ...interface{}) ([]Ob
 	files, _ := model.GetFilesByKeywords(fs.User.ID, keywords...)
 	fs.SetTargetFile(&files)
 
-	return fs.listObjects(ctx, "/", files, nil, nil), nil
+	// TODO 根据关键字搜索目录
+	folders, _ := model.GetFoldersByKeywords(fs.User.ID, keywords...)
+	fs.SetTargetDir(&folders)
+
+	return fs.listObjects(ctx, "/", files, folders, nil), nil
 }
