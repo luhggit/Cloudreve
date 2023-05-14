@@ -1,11 +1,12 @@
 package admin
 
 import (
-	model "github.com/HFO4/cloudreve/models"
-	"github.com/HFO4/cloudreve/pkg/hashid"
-	"github.com/HFO4/cloudreve/pkg/serializer"
-	"github.com/gin-gonic/gin"
 	"strings"
+
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
+	"github.com/gin-gonic/gin"
 )
 
 // ShareBatchService 分享批量操作服务
@@ -16,7 +17,7 @@ type ShareBatchService struct {
 // Delete 删除文件
 func (service *ShareBatchService) Delete(c *gin.Context) serializer.Response {
 	if err := model.DB.Where("id in (?)", service.ID).Delete(&model.Share{}).Error; err != nil {
-		return serializer.DBErr("无法删除分享", err)
+		return serializer.DBErr("Failed to delete share record", err)
 	}
 	return serializer.Response{}
 }

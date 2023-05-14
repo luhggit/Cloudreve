@@ -2,18 +2,20 @@ package explorer
 
 import (
 	"context"
-	model "github.com/HFO4/cloudreve/models"
-	"github.com/HFO4/cloudreve/pkg/filesystem"
-	"github.com/HFO4/cloudreve/pkg/hashid"
-	"github.com/HFO4/cloudreve/pkg/serializer"
-	"github.com/gin-gonic/gin"
 	"strings"
+
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
+	"github.com/cloudreve/Cloudreve/v3/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
+	"github.com/gin-gonic/gin"
 )
 
 // ItemSearchService 文件搜索服务
 type ItemSearchService struct {
 	Type     string `uri:"type" binding:"required"`
 	Keywords string `uri:"keywords" binding:"required"`
+	Path     string `form:"path"`
 }
 
 // Search 执行搜索
@@ -21,15 +23,24 @@ func (service *ItemSearchService) Search(c *gin.Context) serializer.Response {
 	// 创建文件系统
 	fs, err := filesystem.NewFileSystemFromContext(c)
 	if err != nil {
-		return serializer.Err(serializer.CodePolicyNotAllowed, err.Error(), err)
+		return serializer.Err(serializer.CodeCreateFSError, "", err)
 	}
 	defer fs.Recycle()
+
+	if service.Path != "" {
+		ok, parent := fs.IsPathExist(service.Path)
+		if !ok {
+			return serializer.Err(serializer.CodeParentNotExist, "", nil)
+		}
+
+		fs.Root = parent
+	}
 
 	switch service.Type {
 	case "keywords":
 		return service.SearchKeywords(c, fs, "%"+service.Keywords+"%")
 	case "image":
-		return service.SearchKeywords(c, fs, "%.bmp", "%.flac", "%.iff", "%.png", "%.gif", "%.jpg", "%.jpge", "%.psd", "%.svg", "%.webp")
+		return service.SearchKeywords(c, fs, "%.bmp", "%.iff", "%.png", "%.gif", "%.jpg", "%.jpeg", "%.psd", "%.svg", "%.webp")
 	case "video":
 		return service.SearchKeywords(c, fs, "%.mp4", "%.flv", "%.avi", "%.wmv", "%.mkv", "%.rm", "%.rmvb", "%.mov", "%.ogv")
 	case "audio":
@@ -49,9 +60,9 @@ func (service *ItemSearchService) Search(c *gin.Context) serializer.Response {
 				}
 			}
 		}
-		return serializer.Err(serializer.CodeNotFound, "标签不存在", nil)
+		return serializer.Err(serializer.CodeNotFound, "", nil)
 	default:
-		return serializer.ParamErr("未知搜索类型", nil)
+		return serializer.ParamErr("Unknown search type", nil)
 	}
 }
 

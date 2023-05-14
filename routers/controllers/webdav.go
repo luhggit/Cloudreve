@@ -1,12 +1,14 @@
 package controllers
 
 import (
-	model "github.com/HFO4/cloudreve/models"
-	"github.com/HFO4/cloudreve/pkg/filesystem"
-	"github.com/HFO4/cloudreve/pkg/util"
-	"github.com/HFO4/cloudreve/pkg/webdav"
-	"github.com/HFO4/cloudreve/service/setting"
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	"github.com/cloudreve/Cloudreve/v3/pkg/webdav"
+	"github.com/cloudreve/Cloudreve/v3/service/setting"
 	"github.com/gin-gonic/gin"
+	"net/http"
+	"sync"
 )
 
 var handler *webdav.Handler
@@ -15,6 +17,7 @@ func init() {
 	handler = &webdav.Handler{
 		Prefix:     "/dav",
 		LockSystem: make(map[uint]webdav.LockSystem),
+		Mutex:      &sync.Mutex{},
 	}
 }
 
@@ -22,7 +25,7 @@ func init() {
 func ServeWebDAV(c *gin.Context) {
 	fs, err := filesystem.NewFileSystemFromContext(c)
 	if err != nil {
-		util.Log().Warning("无法为WebDAV初始化文件系统，%s", err)
+		util.Log().Warning("Failed to initialize filesystem for WebDAV，%s", err)
 		return
 	}
 
@@ -35,6 +38,15 @@ func ServeWebDAV(c *gin.Context) {
 				root.Position = ""
 				root.Name = "/"
 				fs.Root = root
+			}
+		}
+
+		// 检查是否只读
+		if application.Readonly {
+			switch c.Request.Method {
+			case "DELETE", "PUT", "MKCOL", "COPY", "MOVE":
+				c.Status(http.StatusForbidden)
+				return
 			}
 		}
 	}
@@ -58,6 +70,17 @@ func DeleteWebDAVAccounts(c *gin.Context) {
 	var service setting.WebDAVAccountService
 	if err := c.ShouldBindUri(&service); err == nil {
 		res := service.Delete(c, CurrentUser(c))
+		c.JSON(200, res)
+	} else {
+		c.JSON(200, ErrorResponse(err))
+	}
+}
+
+// UpdateWebDAVAccountsReadonly 更改WebDAV账户只读性
+func UpdateWebDAVAccountsReadonly(c *gin.Context) {
+	var service setting.WebDAVAccountUpdateReadonlyService
+	if err := c.ShouldBindJSON(&service); err == nil {
+		res := service.Update(c, CurrentUser(c))
 		c.JSON(200, res)
 	} else {
 		c.JSON(200, ErrorResponse(err))

@@ -1,12 +1,14 @@
 package routers
 
 import (
-	"github.com/HFO4/cloudreve/models"
-	"github.com/jinzhu/gorm"
-	"github.com/stretchr/testify/assert"
+	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/jinzhu/gorm"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPing(t *testing.T) {
@@ -18,7 +20,7 @@ func TestPing(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, 200, w.Code)
-	asserts.Contains(w.Body.String(), "Pong")
+	asserts.Contains(w.Body.String(), conf.BackendVersion)
 }
 
 func TestCaptcha(t *testing.T) {

@@ -3,13 +3,14 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
-	model "github.com/HFO4/cloudreve/models"
-	"github.com/HFO4/cloudreve/pkg/authn"
-	"github.com/HFO4/cloudreve/pkg/request"
-	"github.com/HFO4/cloudreve/pkg/serializer"
-	"github.com/HFO4/cloudreve/pkg/thumb"
-	"github.com/HFO4/cloudreve/pkg/util"
-	"github.com/HFO4/cloudreve/service/user"
+
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/authn"
+	"github.com/cloudreve/Cloudreve/v3/pkg/request"
+	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v3/pkg/thumb"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	"github.com/cloudreve/Cloudreve/v3/service/user"
 	"github.com/duo-labs/webauthn/webauthn"
 	"github.com/gin-gonic/gin"
 )
@@ -17,15 +18,15 @@ import (
 // StartLoginAuthn 开始注册WebAuthn登录
 func StartLoginAuthn(c *gin.Context) {
 	userName := c.Param("username")
-	expectedUser, err := model.GetUserByEmail(userName)
+	expectedUser, err := model.GetActiveUserByEmail(userName)
 	if err != nil {
-		c.JSON(200, serializer.Err(401, "用户不存在", err))
+		c.JSON(200, serializer.Err(serializer.CodeUserNotFound, "", err))
 		return
 	}
 
 	instance, err := authn.NewAuthnInstance()
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeInternalSetting, "无法初始化Authn", err))
+		c.JSON(200, serializer.Err(serializer.CodeInitializeAuthn, "Cannot initialize authn", err))
 		return
 	}
 
@@ -51,9 +52,9 @@ func StartLoginAuthn(c *gin.Context) {
 // FinishLoginAuthn 完成注册WebAuthn登录
 func FinishLoginAuthn(c *gin.Context) {
 	userName := c.Param("username")
-	expectedUser, err := model.GetUserByEmail(userName)
+	expectedUser, err := model.GetActiveUserByEmail(userName)
 	if err != nil {
-		c.JSON(200, serializer.Err(401, "用户邮箱或密码错误", err))
+		c.JSON(200, serializer.Err(serializer.CodeUserNotFound, "", err))
 		return
 	}
 
@@ -64,14 +65,14 @@ func FinishLoginAuthn(c *gin.Context) {
 
 	instance, err := authn.NewAuthnInstance()
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeInternalSetting, "无法初始化Authn", err))
+		c.JSON(200, serializer.Err(serializer.CodeInitializeAuthn, "Cannot initialize authn", err))
 		return
 	}
 
 	_, err = instance.FinishLogin(expectedUser, sessionData, c.Request)
 
 	if err != nil {
-		c.JSON(200, serializer.Err(401, "登录验证失败", err))
+		c.JSON(200, serializer.Err(serializer.CodeWebAuthnCredentialError, "Verification failed", err))
 		return
 	}
 
@@ -87,7 +88,7 @@ func StartRegAuthn(c *gin.Context) {
 
 	instance, err := authn.NewAuthnInstance()
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeInternalSetting, "无法初始化Authn", err))
+		c.JSON(200, serializer.Err(serializer.CodeInitializeAuthn, "Cannot initialize authn", err))
 		return
 	}
 
@@ -120,7 +121,7 @@ func FinishRegAuthn(c *gin.Context) {
 
 	instance, err := authn.NewAuthnInstance()
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeInternalSetting, "无法初始化Authn", err))
+		c.JSON(200, serializer.Err(serializer.CodeInitializeAuthn, "Cannot initialize authn", err))
 		return
 	}
 
@@ -270,26 +271,26 @@ func UploadAvatar(c *gin.Context) {
 	maxSize := model.GetIntSetting("avatar_size", 2097152)
 	if c.Request.ContentLength == -1 || c.Request.ContentLength > int64(maxSize) {
 		request.BlackHole(c.Request.Body)
-		c.JSON(200, serializer.Err(serializer.CodeUploadFailed, "头像尺寸太大", nil))
+		c.JSON(200, serializer.Err(serializer.CodeFileTooLarge, "", nil))
 		return
 	}
 
 	// 取得上传的文件
 	file, err := c.FormFile("avatar")
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeIOFailed, "无法读取头像数据", err))
+		c.JSON(200, serializer.ParamErr("Failed to read avatar file data", err))
 		return
 	}
 
 	// 初始化头像
 	r, err := file.Open()
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeIOFailed, "无法读取头像数据", err))
+		c.JSON(200, serializer.ParamErr("Failed to read avatar file data", err))
 		return
 	}
 	avatar, err := thumb.NewThumbFromFile(r, file.Filename)
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeIOFailed, "无法解析图像数据", err))
+		c.JSON(200, serializer.ParamErr("Invalid image", err))
 		return
 	}
 
@@ -297,7 +298,7 @@ func UploadAvatar(c *gin.Context) {
 	u := CurrentUser(c)
 	err = avatar.CreateAvatar(u.ID)
 	if err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeIOFailed, "无法创建头像", err))
+		c.JSON(200, serializer.Err(serializer.CodeIOFailed, "Failed to create avatar file", err))
 		return
 	}
 
@@ -305,7 +306,7 @@ func UploadAvatar(c *gin.Context) {
 	if err := u.Update(map[string]interface{}{
 		"avatar": "file",
 	}); err != nil {
-		c.JSON(200, serializer.Err(serializer.CodeDBError, "无法更新头像", err))
+		c.JSON(200, serializer.DBErr("Failed to update avatar attribute", err))
 		return
 	}
 
@@ -348,6 +349,8 @@ func UpdateOption(c *gin.Context) {
 			subService = &user.DeleteWebAuthn{}
 		case "theme":
 			subService = &user.ThemeChose{}
+		default:
+			subService = &user.ChangerNick{}
 		}
 
 		subErr = c.ShouldBindJSON(subService)
@@ -369,6 +372,25 @@ func UserInit2FA(c *gin.Context) {
 	var service user.SettingService
 	if err := c.ShouldBindUri(&service); err == nil {
 		res := service.Init2FA(c, CurrentUser(c))
+		c.JSON(200, res)
+	} else {
+		c.JSON(200, ErrorResponse(err))
+	}
+}
+
+// UserPrepareCopySession generates URL for copy session
+func UserPrepareCopySession(c *gin.Context) {
+	var service user.CopySessionService
+	res := service.Prepare(c, CurrentUser(c))
+	c.JSON(200, res)
+
+}
+
+// UserPerformCopySession copy to create new session or refresh current session
+func UserPerformCopySession(c *gin.Context) {
+	var service user.CopySessionService
+	if err := c.ShouldBindUri(&service); err == nil {
+		res := service.Copy(c)
 		c.JSON(200, res)
 	} else {
 		c.JSON(200, ErrorResponse(err))

@@ -1,25 +1,27 @@
 package routers
 
 import (
-	"github.com/HFO4/cloudreve/bootstrap"
-	"github.com/HFO4/cloudreve/middleware"
-	"github.com/HFO4/cloudreve/pkg/conf"
-	"github.com/HFO4/cloudreve/pkg/hashid"
-	"github.com/HFO4/cloudreve/pkg/util"
-	"github.com/HFO4/cloudreve/routers/controllers"
+	"github.com/cloudreve/Cloudreve/v3/middleware"
+	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cluster"
+	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
+	"github.com/cloudreve/Cloudreve/v3/pkg/hashid"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	wopi2 "github.com/cloudreve/Cloudreve/v3/pkg/wopi"
+	"github.com/cloudreve/Cloudreve/v3/routers/controllers"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/gzip"
-	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 )
 
 // InitRouter 初始化路由
 func InitRouter() *gin.Engine {
 	if conf.SystemConfig.Mode == "master" {
-		util.Log().Info("当前运行模式：Master")
+		util.Log().Info("Current running mode: Master.")
 		return InitMasterRouter()
 	}
-	util.Log().Info("当前运行模式：Slave")
+	util.Log().Info("Current running mode: Slave.")
 	return InitSlaveRouter()
 
 }
@@ -31,7 +33,11 @@ func InitSlaveRouter() *gin.Engine {
 	InitCORS(r)
 	v3 := r.Group("/api/v3/slave")
 	// 鉴权中间件
-	v3.Use(middleware.SignRequired())
+	v3.Use(middleware.SignRequired(auth.General))
+	// 主机信息解析
+	v3.Use(middleware.MasterMetadata())
+	// 禁止缓存
+	v3.Use(middleware.CacheControl())
 
 	/*
 		路由
@@ -39,18 +45,52 @@ func InitSlaveRouter() *gin.Engine {
 	{
 		// Ping
 		v3.POST("ping", controllers.SlavePing)
+		// 测试 Aria2 RPC 连接
+		v3.POST("ping/aria2", controllers.AdminTestAria2)
+		// 接收主机心跳包
+		v3.POST("heartbeat", controllers.SlaveHeartbeat)
 		// 上传
-		v3.POST("upload", controllers.SlaveUpload)
+		upload := v3.Group("upload")
+		{
+			// 上传分片
+			upload.POST(":sessionId", controllers.SlaveUpload)
+			// 创建上传会话上传
+			upload.PUT("", controllers.SlaveGetUploadSession)
+			// 删除上传会话
+			upload.DELETE(":sessionId", controllers.SlaveDeleteUploadSession)
+		}
 		// 下载
 		v3.GET("download/:speed/:path/:name", controllers.SlaveDownload)
 		// 预览 / 外链
 		v3.GET("source/:speed/:path/:name", controllers.SlavePreview)
 		// 缩略图
-		v3.GET("thumb/:path", controllers.SlaveThumb)
+		v3.GET("thumb/:path/:ext", controllers.SlaveThumb)
 		// 删除文件
 		v3.POST("delete", controllers.SlaveDelete)
 		// 列出文件
 		v3.POST("list", controllers.SlaveList)
+
+		// 离线下载
+		aria2 := v3.Group("aria2")
+		aria2.Use(middleware.UseSlaveAria2Instance(cluster.DefaultController))
+		{
+			// 创建离线下载任务
+			aria2.POST("task", controllers.SlaveAria2Create)
+			// 获取任务状态
+			aria2.POST("status", controllers.SlaveAria2Status)
+			// 取消离线下载任务
+			aria2.POST("cancel", controllers.SlaveCancelAria2Task)
+			// 选取任务文件
+			aria2.POST("select", controllers.SlaveSelectTask)
+			// 删除任务临时文件
+			aria2.POST("delete", controllers.SlaveDeleteTempFile)
+		}
+
+		// 异步任务
+		task := v3.Group("task")
+		{
+			task.PUT("transfer", controllers.SlaveCreateTransferTask)
+		}
 	}
 	return r
 }
@@ -70,7 +110,7 @@ func InitCORS(router *gin.Engine) {
 
 	// slave模式下未启动跨域的警告
 	if conf.SystemConfig.Mode == "slave" {
-		util.Log().Warning("当前作为存储端（Slave）运行，但未启用跨域配置，可能会导致 Master 端无法正常上传文件")
+		util.Log().Warning("You are running Cloudreve as slave node, if you are using slave storage policy, please enable CORS feature in config file, otherwise file cannot be uploaded from Master site.")
 	}
 }
 
@@ -82,8 +122,7 @@ func InitMasterRouter() *gin.Engine {
 		静态资源
 	*/
 	r.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/api/"})))
-	r.Use(middleware.InjectSiteInfo())
-	r.Use(static.Serve("/", bootstrap.StaticFS))
+	r.Use(middleware.FrontendFileHandler())
 	r.GET("manifest.json", controllers.Manifest)
 
 	v3 := r.Group("/api/v3")
@@ -98,12 +137,25 @@ func InitMasterRouter() *gin.Engine {
 	if gin.Mode() == gin.TestMode {
 		v3.Use(middleware.MockHelper())
 	}
+	// 用户会话
 	v3.Use(middleware.CurrentUser())
+
+	// 禁止缓存
+	v3.Use(middleware.CacheControl())
 
 	/*
 		路由
 	*/
 	{
+		// Redirect file source link
+		source := r.Group("f")
+		{
+			source.GET(":id/:name",
+				middleware.HashID(hashid.SourceLinkID),
+				middleware.ValidateSourceLink(),
+				controllers.AnonymousPermLink)
+		}
+
 		// 全局设置相关
 		site := v3.Group("site")
 		{
@@ -119,21 +171,22 @@ func InitMasterRouter() *gin.Engine {
 		user := v3.Group("user")
 		{
 			// 用户登录
-			user.POST("session", controllers.UserLogin)
+			user.POST("session", middleware.CaptchaRequired("login_captcha"), controllers.UserLogin)
 			// 用户注册
 			user.POST("",
 				middleware.IsFunctionEnabled("register_enabled"),
+				middleware.CaptchaRequired("reg_captcha"),
 				controllers.UserRegister,
 			)
 			// 用二步验证户登录
 			user.POST("2fa", controllers.User2FALogin)
 			// 发送密码重设邮件
-			user.POST("reset", controllers.UserSendReset)
+			user.POST("reset", middleware.CaptchaRequired("forget_captcha"), controllers.UserSendReset)
 			// 通过邮件里的链接重设密码
 			user.PATCH("reset", controllers.UserReset)
 			// 邮件激活
 			user.GET("activate/:id",
-				middleware.SignRequired(),
+				middleware.SignRequired(auth.General),
 				middleware.HashID(hashid.UserID),
 				controllers.UserActivate,
 			)
@@ -155,23 +208,60 @@ func InitMasterRouter() *gin.Engine {
 			// 获取用户头像
 			user.GET("avatar/:id/:size",
 				middleware.HashID(hashid.UserID),
+				middleware.StaticResourceCache(),
 				controllers.GetUserAvatar,
 			)
 		}
 
 		// 需要携带签名验证的
 		sign := v3.Group("")
-		sign.Use(middleware.SignRequired())
+		sign.Use(middleware.SignRequired(auth.General))
 		{
 			file := sign.Group("file")
 			{
-				// 文件外链
-				file.GET("get/:id/:name", controllers.AnonymousGetContent)
-				// 下載已经打包好的文件
-				file.GET("archive/:id/archive.zip", controllers.DownloadArchive)
+				// 文件外链（直接输出文件数据）
+				file.GET("get/:id/:name",
+					middleware.Sandbox(),
+					middleware.StaticResourceCache(),
+					controllers.AnonymousGetContent,
+				)
+				// 文件外链(301跳转)
+				file.GET("source/:id/:name", controllers.AnonymousPermLinkDeprecated)
 				// 下载文件
-				file.GET("download/:id", controllers.Download)
+				file.GET("download/:id",
+					middleware.StaticResourceCache(),
+					controllers.Download,
+				)
+				// 打包并下载文件
+				file.GET("archive/:sessionID/archive.zip", controllers.DownloadArchive)
 			}
+
+			// Copy user session
+			sign.GET(
+				"user/session/copy/:id",
+				middleware.MobileRequestOnly(),
+				controllers.UserPerformCopySession,
+			)
+		}
+
+		// 从机的 RPC 通信
+		slave := v3.Group("slave")
+		slave.Use(middleware.SlaveRPCSignRequired(cluster.Default))
+		{
+			// 事件通知
+			slave.PUT("notification/:subject", controllers.SlaveNotificationPush)
+			// 上传
+			upload := slave.Group("upload")
+			{
+				// 上传分片
+				upload.POST(":sessionId", controllers.SlaveUpload)
+				// 创建上传会话上传
+				upload.PUT("", controllers.SlaveGetUploadSession)
+				// 删除上传会话
+				upload.DELETE(":sessionId", controllers.SlaveDeleteUploadSession)
+			}
+			// OneDrive 存储策略凭证
+			slave.GET("credential/onedrive/:id", controllers.SlaveGetOneDriveCredential)
 		}
 
 		// 回调接口
@@ -179,25 +269,29 @@ func InitMasterRouter() *gin.Engine {
 		{
 			// 远程策略上传回调
 			callback.POST(
-				"remote/:key",
+				"remote/:sessionID/:key",
+				middleware.UseUploadSession("remote"),
 				middleware.RemoteCallbackAuth(),
 				controllers.RemoteCallback,
 			)
 			// 七牛策略上传回调
 			callback.POST(
-				"qiniu/:key",
+				"qiniu/:sessionID",
+				middleware.UseUploadSession("qiniu"),
 				middleware.QiniuCallbackAuth(),
 				controllers.QiniuCallback,
 			)
 			// 阿里云OSS策略上传回调
 			callback.POST(
-				"oss/:key",
+				"oss/:sessionID",
+				middleware.UseUploadSession("oss"),
 				middleware.OSSCallbackAuth(),
 				controllers.OSSCallback,
 			)
 			// 又拍云策略上传回调
 			callback.POST(
-				"upyun/:key",
+				"upyun/:sessionID",
+				middleware.UseUploadSession("upyun"),
 				middleware.UpyunCallbackAuth(),
 				controllers.UpyunCallback,
 			)
@@ -205,11 +299,12 @@ func InitMasterRouter() *gin.Engine {
 			{
 				// 文件上传完成
 				onedrive.POST(
-					"finish/:key",
+					"finish/:sessionID",
+					middleware.UseUploadSession("onedrive"),
 					middleware.OneDriveCallbackAuth(),
 					controllers.OneDriveCallback,
 				)
-				// 文件上传完成
+				// OAuth 完成
 				onedrive.GET(
 					"auth",
 					controllers.OneDriveOAuth,
@@ -217,14 +312,14 @@ func InitMasterRouter() *gin.Engine {
 			}
 			// 腾讯云COS策略上传回调
 			callback.GET(
-				"cos/:key",
-				middleware.COSCallbackAuth(),
+				"cos/:sessionID",
+				middleware.UseUploadSession("cos"),
 				controllers.COSCallback,
 			)
 			// AWS S3策略上传回调
 			callback.GET(
-				"s3/:key",
-				middleware.S3CallbackAuth(),
+				"s3/:sessionID",
+				middleware.UseUploadSession("s3"),
 				controllers.S3Callback,
 			)
 		}
@@ -266,6 +361,11 @@ func InitMasterRouter() *gin.Engine {
 				middleware.CheckShareUnlocked(),
 				controllers.ListSharedFolder,
 			)
+			// 分享目录搜索
+			share.GET("search/:id/:type/:keywords",
+				middleware.CheckShareUnlocked(),
+				controllers.SearchSharedFolder,
+			)
 			// 归档打包下载
 			share.POST("archive/:id",
 				middleware.CheckShareUnlocked(),
@@ -287,6 +387,22 @@ func InitMasterRouter() *gin.Engine {
 			v3.Group("share").GET("search", controllers.SearchShare)
 		}
 
+		wopi := v3.Group(
+			"wopi",
+			middleware.HashID(hashid.FileID),
+			middleware.WopiAccessValidation(wopi2.Default, cache.Store),
+		)
+		{
+			// 获取文件信息
+			wopi.GET("files/:id", controllers.CheckFileInfo)
+			// 获取文件内容
+			wopi.GET("files/:id/contents", controllers.GetFile)
+			// 更新文件内容
+			wopi.POST("files/:id/contents", middleware.WopiWriteAccess(), controllers.PutFile)
+			// 通用文件操作
+			wopi.POST("files/:id", middleware.WopiWriteAccess(), controllers.ModifyFile)
+		}
+
 		// 需要登录保护的
 		auth := v3.Group("")
 		auth.Use(middleware.AuthRequired())
@@ -306,8 +422,14 @@ func InitMasterRouter() *gin.Engine {
 				admin.GET("groups", controllers.AdminGetGroups)
 				// 重新加载子服务
 				admin.GET("reload/:service", controllers.AdminReloadService)
-				// 重新加载子服务
-				admin.POST("mailTest", controllers.AdminSendTestMail)
+				// 测试设置
+				test := admin.Group("test")
+				{
+					// 测试邮件设置
+					test.POST("mail", controllers.AdminSendTestMail)
+					// 测试缩略图生成器调用
+					test.POST("thumb", controllers.AdminTestThumbGenerator)
+				}
 
 				// 离线下载相关
 				aria2 := admin.Group("aria2")
@@ -371,7 +493,7 @@ func InitMasterRouter() *gin.Engine {
 					// 列出文件
 					file.POST("list", controllers.AdminListFile)
 					// 预览文件
-					file.GET("preview/:id", controllers.AdminGetFile)
+					file.GET("preview/:id", middleware.Sandbox(), controllers.AdminGetFile)
 					// 删除
 					file.POST("delete", controllers.AdminDeleteFile)
 					// 列出用户或外部文件系统目录
@@ -405,6 +527,22 @@ func InitMasterRouter() *gin.Engine {
 					task.POST("import", controllers.AdminCreateImportTask)
 				}
 
+				node := admin.Group("node")
+				{
+					// 列出从机节点
+					node.POST("list", controllers.AdminListNodes)
+					// 列出从机节点
+					node.POST("aria2/test", controllers.AdminTestAria2)
+					// 创建/保存节点
+					node.POST("", controllers.AdminAddNode)
+					// 启用/暂停节点
+					node.PATCH("enable/:id/:desired", controllers.AdminToggleNode)
+					// 删除节点
+					node.DELETE(":id", controllers.AdminDeleteNode)
+					// 获取节点
+					node.GET(":id", controllers.AdminGetNode)
+				}
+
 			}
 
 			// 用户
@@ -416,6 +554,9 @@ func InitMasterRouter() *gin.Engine {
 				user.GET("storage", controllers.UserStorage)
 				// 退出登录
 				user.DELETE("session", controllers.UserSignOut)
+				// Generate temp URL for copying client-side session, used in adding accounts
+				// for mobile App.
+				user.GET("session", controllers.UserPrepareCopySession)
 
 				// WebAuthn 注册相关
 				authn := user.Group("authn",
@@ -446,10 +587,18 @@ func InitMasterRouter() *gin.Engine {
 			// 文件
 			file := auth.Group("file", middleware.HashID(hashid.FileID))
 			{
-				// 文件上传
-				file.POST("upload", controllers.FileUploadStream)
-				// 获取上传凭证
-				file.GET("upload/credential", controllers.GetUploadCredential)
+				// 上传
+				upload := file.Group("upload")
+				{
+					// 文件上传
+					upload.POST(":sessionId/:index", controllers.FileUpload)
+					// 创建上传会话
+					upload.PUT("", controllers.GetUploadSession)
+					// 删除给定上传会话
+					upload.DELETE(":sessionId", controllers.DeleteUploadSession)
+					// 删除全部上传会话
+					upload.DELETE("", controllers.DeleteAllUploadSession)
+				}
 				// 更新文件
 				file.PUT("update/:id", controllers.PutContent)
 				// 创建空白文件
@@ -457,17 +606,18 @@ func InitMasterRouter() *gin.Engine {
 				// 创建文件下载会话
 				file.PUT("download/:id", controllers.CreateDownloadSession)
 				// 预览文件
-				file.GET("preview/:id", controllers.Preview)
+				file.GET("preview/:id", middleware.Sandbox(), controllers.Preview)
 				// 获取文本文件内容
-				file.GET("content/:id", controllers.PreviewText)
+				file.GET("content/:id", middleware.Sandbox(), controllers.PreviewText)
 				// 取得Office文档预览地址
 				file.GET("doc/:id", controllers.GetDocPreview)
 				// 获取缩略图
 				file.GET("thumb/:id", controllers.Thumb)
 				// 取得文件外链
-				file.GET("source/:id", controllers.GetSource)
+				file.POST("source", controllers.GetSource)
 				// 通过文件名取得文件外链
 				file.GET("source-by-name/:name", controllers.GetSourceByName)
+
 				// 打包要下载的文件
 				file.POST("archive", controllers.Archive)
 				// 创建文件压缩任务
@@ -487,7 +637,7 @@ func InitMasterRouter() *gin.Engine {
 				aria2.POST("torrent/:id", middleware.HashID(hashid.FileID), controllers.AddAria2Torrent)
 				// 重新选择要下载的文件
 				aria2.PUT("select/:gid", controllers.SelectAria2File)
-				// 取消下载任务
+				// 取消或删除下载任务
 				aria2.DELETE("task/:gid", controllers.CancelAria2Download)
 				// 获取正在下载中的任务
 				aria2.GET("downloading", controllers.ListDownloading)
@@ -515,6 +665,8 @@ func InitMasterRouter() *gin.Engine {
 				object.POST("copy", controllers.Copy)
 				// 重命名对象
 				object.POST("rename", controllers.Rename)
+				// 获取对象属性
+				object.GET("property/:id", controllers.GetProperty)
 			}
 
 			// 分享
@@ -556,6 +708,8 @@ func InitMasterRouter() *gin.Engine {
 				webdav.POST("accounts", controllers.CreateWebDAVAccounts)
 				// 删除账号
 				webdav.DELETE("accounts/:id", controllers.DeleteWebDAVAccounts)
+				// 更新账号可读性
+				webdav.PATCH("accounts", controllers.UpdateWebDAVAccountsReadonly)
 			}
 
 		}

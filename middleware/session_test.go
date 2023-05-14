@@ -1,13 +1,13 @@
 package middleware
 
 import (
-	"github.com/HFO4/cloudreve/pkg/conf"
-	"github.com/HFO4/cloudreve/pkg/util"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSession(t *testing.T) {
@@ -19,14 +19,6 @@ func TestSession(t *testing.T) {
 		asserts.NotNil(Store)
 		asserts.IsType(emptyFunc(), handler)
 	}
-	{
-		conf.RedisConfig.Server = "123"
-		asserts.Panics(func() {
-			Session("2333")
-		})
-		conf.RedisConfig.Server = ""
-	}
-
 }
 
 func emptyFunc() gin.HandlerFunc {

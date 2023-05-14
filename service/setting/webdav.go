@@ -1,9 +1,9 @@
 package setting
 
 import (
-	model "github.com/HFO4/cloudreve/models"
-	"github.com/HFO4/cloudreve/pkg/serializer"
-	"github.com/HFO4/cloudreve/pkg/util"
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,6 +20,12 @@ type WebDAVAccountService struct {
 type WebDAVAccountCreateService struct {
 	Path string `json:"path" binding:"required,min=1,max=65535"`
 	Name string `json:"name" binding:"required,min=1,max=255"`
+}
+
+// WebDAVAccountUpdateReadonlyService WebDAV 修改只读性服务
+type WebDAVAccountUpdateReadonlyService struct {
+	ID       uint `json:"id" binding:"required,min=1"`
+	Readonly bool `json:"readonly"`
 }
 
 // WebDAVMountCreateService WebDAV 挂载创建服务
@@ -54,6 +60,14 @@ func (service *WebDAVAccountCreateService) Create(c *gin.Context, user *model.Us
 func (service *WebDAVAccountService) Delete(c *gin.Context, user *model.User) serializer.Response {
 	model.DeleteWebDAVAccountByID(service.ID, user.ID)
 	return serializer.Response{}
+}
+
+// Update 修改WebDAV账户的只读性
+func (service *WebDAVAccountUpdateReadonlyService) Update(c *gin.Context, user *model.User) serializer.Response {
+	model.UpdateWebDAVAccountReadonlyByID(service.ID, user.ID, service.Readonly)
+	return serializer.Response{Data: map[string]bool{
+		"readonly": service.Readonly,
+	}}
 }
 
 // Accounts 列出WebDAV账号

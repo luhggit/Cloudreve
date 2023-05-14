@@ -2,11 +2,12 @@ package model
 
 import (
 	"database/sql"
+	"testing"
+
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/HFO4/cloudreve/pkg/cache"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
 	"github.com/jinzhu/gorm"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 var mock sqlmock.Sqlmock
@@ -56,6 +57,15 @@ func TestGetSettingByType(t *testing.T) {
 	mock.ExpectQuery("^SELECT \\* FROM `(.+)` WHERE `(.+)`\\.`deleted_at` IS NULL AND(.+)$").WillReturnRows(rows)
 	settings = GetSettingByType([]string{"basic233"})
 	asserts.Equal(map[string]string{}, settings)
+}
+
+func TestGetSettingByNameWithDefault(t *testing.T) {
+	a := assert.New(t)
+
+	rows := sqlmock.NewRows([]string{"name", "value", "type"})
+	mock.ExpectQuery("^SELECT \\* FROM `(.+)` WHERE `(.+)`\\.`deleted_at` IS NULL AND(.+)$").WillReturnRows(rows)
+	settings := GetSettingByNameWithDefault("123", "123321")
+	a.Equal("123321", settings)
 }
 
 func TestGetSettingByNames(t *testing.T) {

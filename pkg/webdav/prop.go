@@ -10,11 +10,35 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/HFO4/cloudreve/pkg/filesystem"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
+
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
 )
+
+type FileDeadProps struct {
+	*model.File
+}
+
+// 实现 webdav.DeadPropsHolder 接口，不能在models.file里面定义
+func (file *FileDeadProps) DeadProps() (map[xml.Name]Property, error) {
+	return map[xml.Name]Property{
+		xml.Name{Space: "http://owncloud.org/ns", Local: "checksums"}: {
+			XMLName: xml.Name{
+				Space: "http://owncloud.org/ns", Local: "checksums",
+			},
+			InnerXML: []byte("<checksum>" + file.MetadataSerialized[model.ChecksumMetadataKey] + "</checksum>"),
+		},
+	}, nil
+}
+
+func (file *FileDeadProps) Patch([]Proppatch) ([]Propstat, error) {
+	return nil, nil
+}
 
 type FileInfo interface {
 	GetSize() uint64
@@ -174,8 +198,18 @@ var liveProps = map[xml.Name]struct {
 // of one Propstat element.
 func props(ctx context.Context, fs *filesystem.FileSystem, ls LockSystem, fi FileInfo, pnames []xml.Name) ([]Propstat, error) {
 	isDir := fi.IsDir()
+	if !isDir {
+		fi = &FileDeadProps{fi.(*model.File)}
+	}
 
 	var deadProps map[xml.Name]Property
+	if dph, ok := fi.(DeadPropsHolder); ok {
+		var err error
+		deadProps, err = dph.DeadProps()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	pstatOK := Propstat{Status: http.StatusOK}
 	pstatNotFound := Propstat{Status: http.StatusNotFound}
@@ -187,7 +221,7 @@ func props(ctx context.Context, fs *filesystem.FileSystem, ls LockSystem, fi Fil
 		}
 		// Otherwise, it must either be a live property or we don't know it.
 		if prop := liveProps[pn]; prop.findFn != nil && (prop.dir || !isDir) {
-			innerXML, err := prop.findFn(ctx, fs, ls, "", fi)
+			innerXML, err := prop.findFn(ctx, fs, ls, fi.GetName(), fi)
 			if err != nil {
 				return nil, err
 			}
@@ -207,14 +241,27 @@ func props(ctx context.Context, fs *filesystem.FileSystem, ls LockSystem, fi Fil
 // Propnames returns the property names defined for resource name.
 func propnames(ctx context.Context, fs *filesystem.FileSystem, ls LockSystem, fi FileInfo) ([]xml.Name, error) {
 	isDir := fi.IsDir()
+	if !isDir {
+		fi = &FileDeadProps{fi.(*model.File)}
+	}
 
 	var deadProps map[xml.Name]Property
+	if dph, ok := fi.(DeadPropsHolder); ok {
+		var err error
+		deadProps, err = dph.DeadProps()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	pnames := make([]xml.Name, 0, len(liveProps)+len(deadProps))
 	for pn, prop := range liveProps {
 		if prop.findFn != nil && (prop.dir || !isDir) {
 			pnames = append(pnames, pn)
 		}
+	}
+	for pn := range deadProps {
+		pnames = append(pnames, pn)
 	}
 	return pnames, nil
 }
@@ -380,7 +427,7 @@ func findContentType(ctx context.Context, fs *filesystem.FileSystem, ls LockSyst
 	//// Rewind file.
 	//_, err = f.Seek(0, os.SEEK_SET)
 	//return ctype, err
-	return "", nil
+	return mime.TypeByExtension(filepath.Ext(name)), nil
 }
 
 // ETager is an optional interface for the os.FileInfo objects

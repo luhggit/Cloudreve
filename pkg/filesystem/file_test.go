@@ -2,25 +2,27 @@ package filesystem
 
 import (
 	"context"
-	"github.com/DATA-DOG/go-sqlmock"
-	model "github.com/HFO4/cloudreve/models"
-	"github.com/HFO4/cloudreve/pkg/auth"
-	"github.com/HFO4/cloudreve/pkg/cache"
-	"github.com/HFO4/cloudreve/pkg/filesystem/driver/local"
-	"github.com/HFO4/cloudreve/pkg/filesystem/fsctx"
-	"github.com/HFO4/cloudreve/pkg/serializer"
-	"github.com/HFO4/cloudreve/pkg/util"
-	"github.com/jinzhu/gorm"
-	"github.com/stretchr/testify/assert"
+	"errors"
 	"os"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
+	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	"github.com/jinzhu/gorm"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFileSystem_AddFile(t *testing.T) {
 	asserts := assert.New(t)
-	file := local.FileStream{
-		Size: 5,
-		Name: "1.png",
+	file := fsctx.FileStream{
+		Size:     5,
+		Name:     "1.png",
+		SavePath: "/Uploads/1_sad.png",
 	}
 	folder := model.Folder{
 		Model: gorm.Model{
@@ -39,24 +41,54 @@ func TestFileSystem_AddFile(t *testing.T) {
 				},
 			},
 		},
+		Policy: &model.Policy{Type: "cos"},
 	}
-	ctx := context.WithValue(context.Background(), fsctx.FileHeaderCtx, file)
-	ctx = context.WithValue(ctx, fsctx.SavePathCtx, "/Uploads/1_sad.png")
 
-	_, err := fs.AddFile(ctx, &folder)
+	_, err := fs.AddFile(context.Background(), &folder, &file)
 
 	asserts.Error(err)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT(.+)").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE(.+)storage(.+)").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	f, err := fs.AddFile(ctx, &folder)
+	f, err := fs.AddFile(context.Background(), &folder, &file)
 
 	asserts.NoError(err)
 	asserts.NoError(mock.ExpectationsWereMet())
 	asserts.Equal("/Uploads/1_sad.png", f.SourceName)
-	asserts.NotEmpty(f.PicInfo)
+
+	// 前置钩子执行失败
+	{
+		hookExecuted := false
+		fs.Use("BeforeAddFile", func(ctx context.Context, fs *FileSystem, file fsctx.FileHeader) error {
+			hookExecuted = true
+			return errors.New("error")
+		})
+		f, err := fs.AddFile(context.Background(), &folder, &file)
+		asserts.Error(err)
+		asserts.Nil(f)
+		asserts.True(hookExecuted)
+	}
+
+	// 后置钩子执行失败
+	{
+		hookExecuted := false
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT(.+)").WillReturnError(errors.New("error"))
+		mock.ExpectRollback()
+		fs.Hooks = map[string][]Hook{}
+		fs.Use("AfterValidateFailed", func(ctx context.Context, fs *FileSystem, file fsctx.FileHeader) error {
+			hookExecuted = true
+			return errors.New("error")
+		})
+		f, err := fs.AddFile(context.Background(), &folder, &file)
+		asserts.Error(err)
+		asserts.Nil(f)
+		asserts.True(hookExecuted)
+		asserts.NoError(mock.ExpectationsWereMet())
+	}
 }
 
 func TestFileSystem_GetContent(t *testing.T) {
@@ -227,25 +259,25 @@ func TestFileSystem_deleteGroupedFile(t *testing.T) {
 		},
 	}
 
-	// 全部失败
+	// 全部不存在
 	{
 		failed := fs.deleteGroupedFile(ctx, fs.GroupFileByPolicy(ctx, files))
 		asserts.Equal(map[uint][]string{
-			1: {"1_1.txt", "1_2.txt"},
-			2: {"2_1.txt", "2_2.txt"},
-			3: {"3_1.txt"},
+			1: {},
+			2: {},
+			3: {},
 		}, failed)
 	}
-	// 部分失败
+	// 部分不存在
 	{
 		file, err := os.Create(util.RelativePath("1_1.txt"))
 		asserts.NoError(err)
 		_ = file.Close()
 		failed := fs.deleteGroupedFile(ctx, fs.GroupFileByPolicy(ctx, files))
 		asserts.Equal(map[uint][]string{
-			1: {"1_2.txt"},
-			2: {"2_1.txt", "2_2.txt"},
-			3: {"3_1.txt"},
+			1: {},
+			2: {},
+			3: {},
 		}, failed)
 	}
 	// 部分失败,包含整组未知存储策略导致的失败
@@ -258,9 +290,38 @@ func TestFileSystem_deleteGroupedFile(t *testing.T) {
 		files[3].Policy.Type = "unknown"
 		failed := fs.deleteGroupedFile(ctx, fs.GroupFileByPolicy(ctx, files))
 		asserts.Equal(map[uint][]string{
-			1: {"1_2.txt"},
+			1: {},
 			2: {"2_1.txt", "2_2.txt"},
-			3: {"3_1.txt"},
+			3: {},
+		}, failed)
+	}
+	// 包含上传会话文件
+	{
+		sessionID := "session"
+		cache.Set(UploadSessionCachePrefix+sessionID, serializer.UploadSession{Key: sessionID}, 0)
+		files[1].Policy.Type = "local"
+		files[3].Policy.Type = "local"
+		files[0].UploadSessionID = &sessionID
+		failed := fs.deleteGroupedFile(ctx, fs.GroupFileByPolicy(ctx, files))
+		asserts.Equal(map[uint][]string{
+			1: {},
+			2: {},
+			3: {},
+		}, failed)
+		_, ok := cache.Get(UploadSessionCachePrefix + sessionID)
+		asserts.False(ok)
+	}
+
+	// 包含缩略图
+	{
+		files[0].MetadataSerialized = map[string]string{
+			model.ThumbSidecarMetadataKey: "1",
+		}
+		failed := fs.deleteGroupedFile(ctx, fs.GroupFileByPolicy(ctx, files))
+		asserts.Equal(map[uint][]string{
+			1: {},
+			2: {},
+			3: {},
 		}, failed)
 	}
 }

@@ -10,12 +10,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/HFO4/cloudreve/pkg/cache"
-	"github.com/HFO4/cloudreve/pkg/request"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
+	"github.com/cloudreve/Cloudreve/v3/pkg/request"
 )
 
 // GetPublicKey 从回调请求或缓存中获取OSS的回调签名公钥
@@ -37,11 +38,11 @@ func GetPublicKey(r *http.Request) ([]byte, error) {
 	// 确保这个 public key 是由 OSS 颁发的
 	if !strings.HasPrefix(string(pubURL), "http://gosspublic.alicdn.com/") &&
 		!strings.HasPrefix(string(pubURL), "https://gosspublic.alicdn.com/") {
-		return pubKey, errors.New("公钥URL无效")
+		return pubKey, errors.New("public key url invalid")
 	}
 
 	// 获取公钥
-	client := request.HTTPClient{}
+	client := request.NewClient()
 	body, err := client.Request("GET", string(pubURL), nil).
 		CheckHTTPResponse(200).
 		GetResponse()

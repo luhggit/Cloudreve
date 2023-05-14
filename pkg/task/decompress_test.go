@@ -2,11 +2,12 @@ package task
 
 import (
 	"errors"
+	"testing"
+
 	"github.com/DATA-DOG/go-sqlmock"
-	model "github.com/HFO4/cloudreve/models"
+	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/jinzhu/gorm"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestDecompressTask_Props(t *testing.T) {
@@ -98,7 +99,7 @@ func TestNewDecompressTask(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT(.+)").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectCommit()
-		job, err := NewDecompressTask(&model.User{}, "/", "/")
+		job, err := NewDecompressTask(&model.User{}, "/", "/", "utf-8")
 		asserts.NoError(mock.ExpectationsWereMet())
 		asserts.NotNil(job)
 		asserts.NoError(err)
@@ -109,7 +110,7 @@ func TestNewDecompressTask(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT(.+)").WillReturnError(errors.New("error"))
 		mock.ExpectRollback()
-		job, err := NewDecompressTask(&model.User{}, "/", "/")
+		job, err := NewDecompressTask(&model.User{}, "/", "/", "utf-8")
 		asserts.NoError(mock.ExpectationsWereMet())
 		asserts.Nil(job)
 		asserts.Error(err)
