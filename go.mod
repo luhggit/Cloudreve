@@ -45,6 +45,8 @@ require (
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
 )
 
+require github.com/mattn/go-colorable v0.1.4 // indirect
+
 require (
 	cloud.google.com/go v0.81.0 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
@@ -170,5 +172,3 @@ require (
 	sigs.k8s.io/yaml v1.2.0 // indirect
 
 )
-
-require github.com/mattn/go-colorable v0.1.4 // indirect

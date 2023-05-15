@@ -262,6 +262,12 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force, unl
 	// 所有文件的ID
 	var allFiles = make([]*model.File, 0, len(fs.FileTarget))
 
+	// luhg 在这里先查出要删除的目录，不然后面被标记为删除之后就找不到了
+	curFolders, err := model.GetFoldersByIDs(dirs, fs.User.ID)
+	if err != nil {
+		return nil
+	}
+
 	// 列出要删除的目录
 	if len(dirs) > 0 {
 		err := fs.ListDeleteDirs(ctx, dirs)
@@ -347,12 +353,7 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force, unl
 		)
 	}
 
-	// 当前层级的文件夹
-	curFolders, err := model.GetFoldersByIDs(dirs, fs.User.ID)
-	if err != nil {
-		return nil
-	}
-	// 本地存储策略，删除目录
+	// luhg 本地存储策略，删除目录
 	if fs.User.Policy.Type == "local" {
 		if len(dirs) > 0 {
 			if len(curFolders) > 0 {

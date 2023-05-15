@@ -157,6 +157,7 @@ func GetFoldersByIDs(ids []uint, uid uint) ([]Folder, error) {
 	return folders, result.Error
 }
 
+// luhg
 // GetFoldersByKeywords 根据关键字搜索文件夹,
 // UID为0表示忽略用户
 func GetFoldersByKeywords(uid uint, keywords ...interface{}) ([]Folder, error) {
@@ -175,7 +176,7 @@ func GetFoldersByKeywords(uid uint, keywords ...interface{}) ([]Folder, error) {
 	}
 
 	if uid != 0 {
-		result = result.Where("user_id = ?", uid)
+		result = result.Where("owner_id = ?", uid)
 	}
 	result = result.Where("("+conditions+")", keywords...).Find(&folders)
 
